@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -20,7 +19,13 @@ import (
 	"promo-scraper/internal/config"
 	"promo-scraper/internal/modules/scraping/collection/application"
 	collectinfra "promo-scraper/internal/modules/scraping/collection/infrastructure"
+	"promo-scraper/internal/shared/envelope"
+	"promo-scraper/internal/shared/pagination"
 )
+
+// useCaseHardCap limita o total de itens coletados em memória para que a
+// paginação in-memory tenha material suficiente sem inflar latência/RAM.
+const useCaseHardCap = 500
 
 const (
 	readHeaderTimeout = 5 * time.Second
@@ -29,10 +34,10 @@ const (
 	cronTimeZone      = "America/Sao_Paulo"
 )
 
-var curatedTargets = []application.CuratedTarget{
-	{Loja: "mercado livre", StoreID: 101, URL: "https://www.mercadolivre.com.br/notebook-positivo-vision-i15m-com-minitela-intel-core-3-8gb-de-ram-ssd-de-256gb-e-tela-de-156-full-hd-ips-antirreflexo/p/MLB56961557"},
-	{Loja: "terabyte", StoreID: 102, URL: "https://www.terabyteshop.com.br/produto/13953/ssd-patriot-p300-256gb-nvme-leitura-1700mbs-e-gravacao-1100mbs-p300p256gm28us"},
-}
+// curatedTargets mantém alvos pontuais para inspeção via Collector (não
+// integrados ao ranking principal por padrão; cada loja com listagem própria
+// é coletada pelos OffersProviders abaixo).
+var curatedTargets []application.CuratedTarget
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -86,8 +91,12 @@ func buildUseCase(cfg config.Config, logger *slog.Logger) *application.ListPromo
 	headlessC := collectinfra.NewHeadlessCollector(cfg.ChromePath, timeout, bucket, logger)
 	router := collectinfra.NewRoutingCollector(httpC, nil, headlessC, logger)
 
-	kabum := collectinfra.NewKabumOffersCollector(cfg.HTTPTimeout)
-	return application.NewListPromotionsUseCase(kabum, router, curatedTargets, logger)
+	providers := []application.NamedOffersProvider{
+		{Loja: "kabum", Provider: collectinfra.NewKabumOffersCollector(cfg.HTTPTimeout)},
+		{Loja: "mercado livre", Provider: collectinfra.NewMercadoLivreOffersCollector(cfg.HTTPTimeout)},
+		{Loja: "terabyte", Provider: collectinfra.NewTerabyteOffersCollector(headlessC)},
+	}
+	return application.NewListPromotionsUseCase(providers, router, curatedTargets, logger)
 }
 
 func newRouter(uc *application.ListPromotionsUseCase, logger *slog.Logger) http.Handler {
@@ -107,24 +116,24 @@ func newRouter(uc *application.ListPromotionsUseCase, logger *slog.Logger) http.
 
 func promotionsHandler(uc *application.ListPromotionsUseCase, logger *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
+		q := req.URL.Query()
+		page := pagination.FromQuery(q)
+
 		in := application.ListPromotionsInput{
-			Loja:        req.URL.Query().Get("loja"),
-			MinDesconto: atoiDefault(req.URL.Query().Get("min_desconto"), 0),
-			Limit:       atoiDefault(req.URL.Query().Get("limit"), 50),
+			Loja:        q.Get("loja"),
+			MinDesconto: atoiDefault(q.Get("min_desconto"), 0),
+			Limit:       useCaseHardCap,
 		}
 
 		out, err := uc.Execute(req.Context(), in)
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			envelope.WriteError(w, http.StatusInternalServerError, "internal_error", err.Error())
 			return
 		}
 
-		writeJSON(w, http.StatusOK, map[string]any{
-			"total":       len(out.Itens),
-			"coletado_em": time.Now().UTC().Format(time.RFC3339),
-			"erros":       out.Erros,
-			"promocoes":   toJSON(out.Itens),
-		})
+		dtos := toJSON(out.Itens)
+		window, meta := pagination.Slice(dtos, page)
+		envelope.WriteJSON(w, http.StatusOK, envelope.NewCollection(window, meta, out.Erros))
 	}
 }
 
@@ -196,10 +205,4 @@ func atoiDefault(s string, def int) int {
 		return def
 	}
 	return n
-}
-
-func writeJSON(w http.ResponseWriter, status int, body any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(body)
 }

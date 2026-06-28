@@ -1,5 +1,5 @@
-ARG GO_VERSION=1.23
-ARG ALPINE_VERSION=3.21
+ARG GO_VERSION=1.26
+ARG ALPINE_VERSION=3.23
 
 # ---------- builder ----------
 FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
@@ -36,9 +36,10 @@ USER app
 EXPOSE 8080
 ENV PORT=8080 \
     GOMEMLIMIT=512MiB \
-    CHROME_PATH=/usr/bin/chromium-browser
+    CHROME_PATH=/usr/bin/chromium-browser \
+    HEADLESS_TIMEOUT=60s
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-  CMD wget -qO- http://localhost:8080/health || exit 1
+  CMD wget -qO- http://localhost:8080/healthz || exit 1
 
 ENTRYPOINT ["/usr/local/bin/server"]

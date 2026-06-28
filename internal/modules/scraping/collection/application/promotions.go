@@ -25,6 +25,11 @@ type OffersProvider interface {
 	Offers(ctx context.Context, minDesconto, limit int) ([]PromoItem, error)
 }
 
+type NamedOffersProvider struct {
+	Loja     string
+	Provider OffersProvider
+}
+
 type CuratedTarget struct {
 	Loja    string
 	URL     string
@@ -43,14 +48,14 @@ type ListPromotionsOutput struct {
 }
 
 type ListPromotionsUseCase struct {
-	kabumOffers OffersProvider
-	collector   Collector
-	curated     []CuratedTarget
-	logger      *slog.Logger
+	providers []NamedOffersProvider
+	collector Collector
+	curated   []CuratedTarget
+	logger    *slog.Logger
 }
 
 func NewListPromotionsUseCase(
-	kabumOffers OffersProvider,
+	providers []NamedOffersProvider,
 	collector Collector,
 	curated []CuratedTarget,
 	logger *slog.Logger,
@@ -59,24 +64,33 @@ func NewListPromotionsUseCase(
 		logger = slog.Default()
 	}
 	return &ListPromotionsUseCase{
-		kabumOffers: kabumOffers,
-		collector:   collector,
-		curated:     curated,
-		logger:      logger,
+		providers: providers,
+		collector: collector,
+		curated:   curated,
+		logger:    logger,
 	}
 }
 
 func (uc *ListPromotionsUseCase) Execute(ctx context.Context, in ListPromotionsInput) (ListPromotionsOutput, error) {
 	out := ListPromotionsOutput{Erros: map[string]string{}}
 
-	if wants(in.Loja, "kabum") && uc.kabumOffers != nil {
-		itens, err := uc.kabumOffers.Offers(ctx, in.MinDesconto, in.Limit)
-		if err != nil {
-			out.Erros["kabum"] = err.Error()
-			uc.logger.Warn("promotions kabum_error", slog.String("error", err.Error()))
-		} else {
-			out.Itens = append(out.Itens, itens...)
+	for _, p := range uc.providers {
+		if p.Provider == nil {
+			continue
 		}
+		if !wants(in.Loja, p.Loja) {
+			continue
+		}
+		itens, err := p.Provider.Offers(ctx, in.MinDesconto, in.Limit)
+		if err != nil {
+			out.Erros[p.Loja] = err.Error()
+			uc.logger.Warn("promotions provider_error",
+				slog.String("loja", p.Loja),
+				slog.String("error", err.Error()),
+			)
+			continue
+		}
+		out.Itens = append(out.Itens, itens...)
 	}
 
 	for _, target := range uc.curated {
