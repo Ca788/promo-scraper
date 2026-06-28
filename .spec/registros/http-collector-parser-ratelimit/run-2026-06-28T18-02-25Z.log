@@ -1,0 +1,133 @@
+# Execução do Passo 03 — Coletor HTTP real + parser + rate-limit
+
+Branch: `feat/coleta-de-promo`
+Data: 2026-06-28T18:02:25Z
+
+## Arquivos tocados (`git diff --cached --name-only`)
+
+```
+go.mod
+go.sum
+internal/modules/scraping/collection/infrastructure/http_collector.go
+internal/modules/scraping/collection/infrastructure/http_collector_test.go
+internal/modules/scraping/collection/infrastructure/parser.go
+internal/modules/scraping/collection/infrastructure/parser_test.go
+internal/modules/scraping/collection/infrastructure/token_bucket.go
+internal/modules/scraping/collection/infrastructure/token_bucket_test.go
+internal/modules/scraping/collection/infrastructure/user_agents.go
+```
+
+Nenhum arquivo de `.spec/`, `main.go`, Docker, fly, CI, ou sqlc/migrations tocado.
+Nenhum `git commit` executado.
+
+## Comandos rodados (em ordem)
+
+### 1. Adicionar dependências
+```
+go get github.com/PuerkitoBio/goquery
+go get golang.org/x/time/rate
+go mod tidy
+```
+Resumo: adicionados `github.com/PuerkitoBio/goquery v1.12.0`, `github.com/andybalholm/cascadia v1.3.3`, `golang.org/x/net v0.52.0`, `golang.org/x/time v0.15.0`. Upgrades indiretos em `golang.org/x/sync` e `golang.org/x/text`. `github.com/shopspring/decimal` já estava presente do Passo 01.
+
+### 2. Sanity Passos 01 e 02 (devem continuar verdes)
+Comando:
+```
+DATABASE_URL="postgres://app:app@localhost:55432/app?sslmode=disable" \
+go test ./internal/modules/scraping/sources/... \
+        ./internal/modules/scraping/promo_events/... \
+        ./internal/modules/scraping/collection/application/... \
+        -race -cover -p 1
+```
+Saída:
+```
+ok      promo-scraper/internal/modules/scraping/sources/domain                  coverage: 100.0% of statements
+ok      promo-scraper/internal/modules/scraping/sources/infrastructure   1.588s coverage: 77.5% of statements
+        promo-scraper/internal/modules/scraping/sources/infrastructure/sqlc     coverage: 0.0% of statements
+ok      promo-scraper/internal/modules/scraping/promo_events/domain      1.016s coverage: 100.0% of statements
+ok      promo-scraper/internal/modules/scraping/promo_events/infrastructure 1.266s coverage: 81.8% of statements
+        promo-scraper/internal/modules/scraping/promo_events/infrastructure/sqlc coverage: 0.0% of statements
+ok      promo-scraper/internal/modules/scraping/collection/application   1.017s coverage: 100.0% of statements
+```
+
+### 3. Suite completa
+Comando:
+```
+DATABASE_URL="postgres://app:app@localhost:55432/app?sslmode=disable" \
+go test ./... -race -cover -p 1
+```
+Saída:
+```
+        promo-scraper            coverage: 0.0% of statements
+ok      promo-scraper/internal/modules/scraping/collection/application           coverage: 100.0% of statements
+ok      promo-scraper/internal/modules/scraping/collection/infrastructure 1.525s coverage: 82.9% of statements
+ok      promo-scraper/internal/modules/scraping/promo_events/domain              coverage: 100.0% of statements
+ok      promo-scraper/internal/modules/scraping/promo_events/infrastructure      coverage: 81.8% of statements
+        promo-scraper/internal/modules/scraping/promo_events/infrastructure/sqlc coverage: 0.0% of statements
+ok      promo-scraper/internal/modules/scraping/sources/domain                   coverage: 100.0% of statements
+ok      promo-scraper/internal/modules/scraping/sources/infrastructure           coverage: 77.5% of statements
+        promo-scraper/internal/modules/scraping/sources/infrastructure/sqlc      coverage: 0.0% of statements
+        promo-scraper/internal/shared/clock                                       coverage: 0.0% of statements
+```
+
+Cobertura por pacote (relevantes a este Passo):
+- `collection/infrastructure` — **82.9%** (alvo: 80%+, atendido).
+- `collection/application` — 100% (mantida do Passo 02).
+- `sources/domain` — 100%, `sources/infrastructure` — 77.5% (mantidos do Passo 01).
+- `promo_events/domain` — 100%, `promo_events/infrastructure` — 81.8% (mantidos do Passo 02).
+
+Pacotes `*/sqlc` e `cmd/server` continuam com cobertura 0% por design (gerado por sqlc / `main.go` não exercitado por unit test).
+
+### 4. go vet
+```
+go vet ./...
+```
+Saída: vazia (limpo).
+
+### 5. golangci-lint
+Não disponível no PATH local. Pulado conforme instrução do prompt.
+
+### 6. Verificação "zero comentários"
+```
+grep -rnE '^\s*//|^\s*/\*' internal/modules/scraping/collection/infrastructure/
+```
+Saída: vazia. Confirmado: nenhum comentário (`//`, `/* */`) nos 7 arquivos manuais criados.
+
+## Testes que cobrem os 4 critérios BDD do `CENARIO.md`
+
+| Critério BDD                                   | Teste                                     |
+|------------------------------------------------|-------------------------------------------|
+| Queda de preço detectada (caminho feliz)       | `TestCollect_HappyPath`                   |
+| Seletor de preço não casa                      | `TestCollect_SelectorNotMatched`          |
+| Preço extraído inválido (0 ou negativo)        | `TestCollect_InvalidPrice` + `TestParseProduct_ErrorCases/preco_zero,preco_negativo` |
+| Timeout / 5xx                                  | `TestCollect_Timeout` + `TestCollect_ServerError5xx` + `TestCollect_StatusTooManyRequests` |
+
+Testes adicionais (defesa em profundidade):
+- `TestCollect_SendsRealisticUserAgent` — UA enviado pertence ao pool rotativo.
+- `TestCollect_RespectsTokenBucket` — segunda chamada aguarda a regeneração do token.
+- `TestCollect_UnsupportedStrategy` — `strategy="headless"` retorna `ErrFetchFailed` claro.
+- `TestCollect_ContextCancelled` — cancelamento de contexto propaga como `ErrFetchFailed`.
+- `TestCollect_GzipResponse` — decodifica resposta gzip corretamente.
+- `TestNormalizeBRPrice` — tabela com 6 variações de formato BR (incluindo "R$ 1.234,56", "R$ 99,90", "R$ 5.999,00", "R$1.000.000,00").
+- `TestAcquire_RespectsRate / _IsolatedPerStore / _ContextCancelled / _ConcurrentSafe`.
+
+## Decisões pontuais tomadas neste Passo
+
+- **Timeout default do `http.Client`**: 10s (`DefaultHTTPTimeout`), conforme DoD do Passo 03.
+- **`maxResponseBytes`**: 5 MiB via `io.LimitReader` para defesa contra `OOM` em resposta absurda.
+- **Cabeçalhos enviados**: `User-Agent: RandomUserAgent()`, `Accept-Language: pt-BR,pt;q=0.9,en;q=0.8`, `Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8`, `Accept-Encoding: gzip`. Quando a loja responde `Content-Encoding: gzip`, descomprimimos com `compress/gzip` antes de passar ao parser.
+- **Construtor renomeado**: `NewTokenBucketRegistry(rate, burst)` e `NewHTTPCollector(timeout, bucket, logger)` (em vez de apenas `New(...)`), para evitar colisão de nomes dentro do mesmo pacote `infrastructure`. Mantém a semântica descrita no Passo.
+- **Default rate / burst do `TokenBucketRegistry`**: parametrizado no construtor (sem padrão hardcoded no construtor). Quem instancia decide: para o worker (Passo futuro), o Desenho indica 30 req/min com burst 1 como ponto de partida configurável por loja.
+- **Tradução de erros HTTP**: extraída em `translateHTTPError(err, resp, url)` + `classifyStatus(status, url)` para função testável separada (refator azul do TDD).
+- **Pool de User-Agents**: slice de 10 strings UA Chrome 130–132, Firefox 132–133, Edge 130 e Safari 17.6. Seleção pseudo-aleatória via `math/rand/v2`. Função `userAgentPool()` (não exportada) usada apenas pelos testes para verificar pertencimento — não vaza o slice mutável.
+- **`time.Now()` no `Snapshot`**: usado em `infrastructure/parser.go` (em UTC) — conforme `CLAUDE.md`, a proibição de `time.Now()` aplica-se ao `domain/`, não ao `infrastructure/`. Use case real injeta `clock` quando necessário.
+
+## Critérios de sucesso (todos atendidos)
+
+- [x] Todos os testes verdes em `go test ./... -race -cover -p 1`.
+- [x] 4 critérios BDD do `CENARIO.md` cobertos por testes do `HTTPCollector`.
+- [x] `go vet ./...` limpo.
+- [x] `grep -rnE '^\s*//|^\s*/\*' internal/modules/scraping/collection/infrastructure/` retorna vazio.
+- [x] Cobertura `collection/infrastructure` = 82.9% (acima do alvo de 80%).
+- [x] `git add` apenas dos 9 arquivos tocados. Nenhum `git commit`.
+- [x] Nenhum arquivo proibido (`.spec/`, `main.go`, `docker-compose.yml`, `Dockerfile`, `fly.toml`, `CLAUDE.md`, `.github/`, sqlc gerados) foi modificado.
