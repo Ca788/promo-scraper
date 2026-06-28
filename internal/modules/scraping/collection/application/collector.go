@@ -8,9 +8,10 @@ import (
 )
 
 var (
-	ErrSelectorNotMatched = errors.New("selector did not match")
-	ErrInvalidPrice       = errors.New("invalid price")
-	ErrFetchFailed        = errors.New("fetch failed")
+	ErrSelectorNotMatched  = errors.New("selector did not match")
+	ErrInvalidPrice        = errors.New("invalid price")
+	ErrFetchFailed         = errors.New("fetch failed")
+	ErrStrategyUnsupported = errors.New("strategy not supported")
 )
 
 type Collector interface {

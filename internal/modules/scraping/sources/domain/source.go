@@ -12,6 +12,7 @@ type Strategy string
 const (
 	StrategyHTTP     Strategy = "http"
 	StrategyHeadless Strategy = "headless"
+	StrategyAPI      Strategy = "api"
 )
 
 type Source struct {

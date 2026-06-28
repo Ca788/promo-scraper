@@ -2,7 +2,7 @@
 artefato: desenho
 espec_local: ./ESPEC.md
 criado_em: 2026-06-28T16:45:00Z
-atualizado_em: 2026-06-28T16:45:00Z
+atualizado_em: 2026-06-28T18:50:00Z
 ---
 
 # Desenho técnico — coleta-de-promo

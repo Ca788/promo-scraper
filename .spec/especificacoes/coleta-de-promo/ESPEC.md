@@ -2,8 +2,8 @@
 artefato: especificacao
 visao_local: ../../VISAO.md
 criado_em: 2026-06-28T16:37:53Z
-atualizado_em: 2026-06-28T16:37:53Z
-versao: v1
+atualizado_em: 2026-06-28T18:45:00Z
+versao: v2
 ---
 
 # Especificação — coleta-de-promo
@@ -68,7 +68,7 @@ A oportunidade da Visão se materializa aqui: as lojas brasileiras de hardware/e
 | Questão | Quem decide | Prazo |
 |---|---|---|
 | ~~Estratégia de scraping por loja: HTTP puro vs. headless com stealth.~~ **Resolvida em `DESENHO.md` (2026-06-28):** híbrido com default HTTP; `chromedp` caso-a-caso. | — | Resolvida |
-| Quais lojas exatas entram no MVP (Kabum, Pichau, Terabyte? Amazon BR / ML para fase 2?). | Tech lead + produto | Antes do primeiro Cenário de coleta real |
+| ~~Quais lojas exatas entram no MVP.~~ **Resolvida em `DESENHO.md` (2026-06-28):** Kabum, Pichau, Terabyte, Amazon BR e Mercado Livre. Probe empírico confirmou que **todas** exigem headless; HTTP simples fica como fast-path opt-in para fontes leves. | — | Resolvida |
 
 ## 📐 Decisões registradas
 
@@ -81,6 +81,7 @@ A oportunidade da Visão se materializa aqui: as lojas brasileiras de hardware/e
 | 2026-06-28 | Sistemas externos do MVP são apenas as lojas-alvo. Sem dependência de provider pago de proxy residencial nem de serviço gerenciado de browser headless nesta fase. | Manter custo unitário baixo e validar viabilidade técnica antes de assumir custo fixo de provider. Se a taxa de bloqueio inviabilizar, revisita em decisão técnica posterior. | Especificação inicial |
 | 2026-06-28 | Restrições registradas nesta capacidade são performance crítica e idempotência. Multi-tenant (`org_id`) é regra global do `CLAUDE.md` e aplica sem precisar ser repetida aqui. | Foco da Especificação é o que é específico desta capacidade; regras globais ficam onde já estão para evitar duplicação que envelhece mal. | Especificação inicial |
 | 2026-06-28 | Pendência "HTTP vs. headless" resolvida em `DESENHO.md`: scraping híbrido com default HTTP (`net/http` + `goquery`), `chromedp` caso-a-caso por fonte. | Desenho técnico detalha trade-offs e alternativas rejeitadas; cabe registrar aqui que esta decisão saiu do estado "aberto". | Desenho técnico |
+| 2026-06-28 | Lojas-alvo do MVP: **Kabum, Pichau, Terabyte, Amazon BR, Mercado Livre**. Default de `sources.strategy` para todas elas passa a ser `headless`. HTTP simples vira fast-path opt-in para fontes confirmadamente leves (RSS, sitemap, lojas sem anti-bot). | Probe empírico (curl com UA realista, 2026-06-28) mostrou: ML redireciona qualquer URL com preço para `/gz/account-verification`; Terabyte responde 403 com challenge Cloudflare ("Just a moment..."); Kabum/Pichau são notoriamente protegidos pelo mesmo perfil. A premissa original do DESENHO ("começamos 100% em HTTP") não sobrevive ao mundo real — o anti-bot subiu nas lojas BR-hardware. | Descoberta operacional |
 
 ## 🔗 Cenários vinculados
 

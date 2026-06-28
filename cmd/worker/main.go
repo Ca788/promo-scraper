@@ -74,10 +74,24 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	)
 	httpClient := collectinfra.NewHTTPCollector(cfg.HTTPTimeout, bucket, logger)
 
+	var meliClient *collectinfra.MercadoLivreAPICollector
+	if cfg.MeliAccessToken != "" {
+		meliClient = collectinfra.NewMercadoLivreAPICollector(cfg.MeliAccessToken, cfg.HTTPTimeout)
+	} else {
+		logger.Warn("mercadolivre_api_disabled", slog.String("reason", "MELI_ACCESS_TOKEN ausente"))
+	}
+	var headlessClient *collectinfra.HeadlessCollector
+	if cfg.HeadlessEnabled {
+		headlessClient = collectinfra.NewHeadlessCollector(cfg.ChromePath, cfg.HeadlessTimeout, bucket, logger)
+	} else {
+		logger.Warn("headless_disabled", slog.String("reason", "HEADLESS_ENABLED ausente — ML/Terabyte ficam indisponíveis"))
+	}
+	collector := collectinfra.NewRoutingCollector(httpClient, meliClient, headlessClient, logger)
+
 	srcRepo := sourcesinfra.NewPGSourceRepository(pool)
 	evtRepo := eventsinfra.NewPGPromoEventRepository(pool)
 
-	uc := application.NewCollectSourceUseCase(srcRepo, evtRepo, httpClient, clock.SystemClock{}, logger)
+	uc := application.NewCollectSourceUseCase(srcRepo, evtRepo, collector, clock.SystemClock{}, logger)
 
 	workers := river.NewWorkers()
 	river.AddWorker(workers, collectinfra.NewCollectSourceWorker(uc, srcRepo, metrics, logger))

@@ -49,13 +49,27 @@ func (c *HTTPCollector) Collect(ctx context.Context, src sources.Source) (source
 		return sources.Snapshot{}, fmt.Errorf("strategy %q not supported by http collector: %w", src.Strategy, application.ErrFetchFailed)
 	}
 
+	body, err := c.Fetch(ctx, src)
+	if err != nil {
+		return sources.Snapshot{}, err
+	}
+
+	snap, err := ParseProduct(body, src.Selectors)
+	if err != nil {
+		c.sourceLogger(src).Warn("http_collector parse_error", slog.String("error", err.Error()))
+		return sources.Snapshot{}, err
+	}
+	return snap, nil
+}
+
+func (c *HTTPCollector) Fetch(ctx context.Context, src sources.Source) ([]byte, error) {
 	if err := c.bucket.Acquire(ctx, src.StoreID); err != nil {
-		return sources.Snapshot{}, fmt.Errorf("acquire bucket for store %d: %w", src.StoreID, application.ErrFetchFailed)
+		return nil, fmt.Errorf("acquire bucket for store %d: %w", src.StoreID, application.ErrFetchFailed)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.URL, nil)
 	if err != nil {
-		return sources.Snapshot{}, fmt.Errorf("build request for %s: %w", src.URL, application.ErrFetchFailed)
+		return nil, fmt.Errorf("build request for %s: %w", src.URL, application.ErrFetchFailed)
 	}
 	req.Header.Set("User-Agent", RandomUserAgent())
 	req.Header.Set("Accept-Language", "pt-BR,pt;q=0.9,en;q=0.8")
@@ -76,33 +90,31 @@ func (c *HTTPCollector) Collect(ctx context.Context, src sources.Source) (source
 	if err != nil {
 		translated := translateHTTPError(err, nil, src.URL)
 		logger.Warn("http_collector fetch_error", slog.String("error", err.Error()))
-		return sources.Snapshot{}, translated
+		return nil, translated
 	}
 	defer resp.Body.Close()
 
 	if err := classifyStatus(resp.StatusCode, src.URL); err != nil {
-		logger.Warn("http_collector status_error",
-			slog.Int("status_code", resp.StatusCode),
-		)
-		return sources.Snapshot{}, err
+		logger.Warn("http_collector status_error", slog.Int("status_code", resp.StatusCode))
+		return nil, err
 	}
 
 	body, err := readBody(resp)
 	if err != nil {
 		logger.Warn("http_collector read_body_error", slog.String("error", err.Error()))
-		return sources.Snapshot{}, fmt.Errorf("read body from %s: %w", src.URL, application.ErrFetchFailed)
+		return nil, fmt.Errorf("read body from %s: %w", src.URL, application.ErrFetchFailed)
 	}
 
-	snap, err := ParseProduct(body, src.Selectors)
-	if err != nil {
-		logger.Warn("http_collector parse_error", slog.String("error", err.Error()))
-		return sources.Snapshot{}, err
-	}
+	logger.Info("http_collector success", slog.Int("status_code", resp.StatusCode))
+	return body, nil
+}
 
-	logger.Info("http_collector success",
-		slog.Int("status_code", resp.StatusCode),
+func (c *HTTPCollector) sourceLogger(src sources.Source) *slog.Logger {
+	return c.logger.With(
+		slog.Int64("source_id", src.ID),
+		slog.Int64("store_id", src.StoreID),
+		slog.String("strategy", string(src.Strategy)),
 	)
-	return snap, nil
 }
 
 func translateHTTPError(err error, resp *http.Response, url string) error {

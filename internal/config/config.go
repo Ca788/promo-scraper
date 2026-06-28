@@ -19,6 +19,7 @@ const (
 	DefaultRateLimitPerMin   = 30
 	DefaultRateLimitBurst    = 1
 	DefaultMaxAttempts       = 5
+	DefaultHeadlessTimeout   = 30 * time.Second
 )
 
 var ErrDatabaseURLRequired = errors.New("DATABASE_URL is required")
@@ -33,6 +34,10 @@ type Config struct {
 	RateLimitPerMin   int
 	RateLimitBurst    int
 	MaxAttempts       int
+	MeliAccessToken   string
+	HeadlessEnabled   bool
+	ChromePath        string
+	HeadlessTimeout   time.Duration
 }
 
 func Load() (Config, error) {
@@ -45,6 +50,24 @@ func Load() (Config, error) {
 		RateLimitPerMin:   DefaultRateLimitPerMin,
 		RateLimitBurst:    DefaultRateLimitBurst,
 		MaxAttempts:       DefaultMaxAttempts,
+		MeliAccessToken:   strings.TrimSpace(os.Getenv("MELI_ACCESS_TOKEN")),
+		ChromePath:        strings.TrimSpace(os.Getenv("CHROME_PATH")),
+		HeadlessTimeout:   DefaultHeadlessTimeout,
+	}
+
+	if v := strings.TrimSpace(os.Getenv("HEADLESS_ENABLED")); v != "" {
+		cfg.HeadlessEnabled = v == "1" || strings.EqualFold(v, "true")
+	}
+
+	if v := strings.TrimSpace(os.Getenv("HEADLESS_TIMEOUT")); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return Config{}, fmt.Errorf("HEADLESS_TIMEOUT inválido %q: %w", v, err)
+		}
+		if d <= 0 {
+			return Config{}, fmt.Errorf("HEADLESS_TIMEOUT deve ser positivo, recebido %q", v)
+		}
+		cfg.HeadlessTimeout = d
 	}
 
 	if cfg.DatabaseURL == "" {

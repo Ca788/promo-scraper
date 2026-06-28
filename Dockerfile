@@ -24,6 +24,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM alpine:${ALPINE_VERSION} AS runtime
 
 RUN apk add --no-cache ca-certificates tzdata wget \
+    chromium nss freetype harfbuzz ttf-freefont font-noto \
  && addgroup -S app && adduser -S -G app app
 
 WORKDIR /app
@@ -34,7 +35,8 @@ USER app
 
 EXPOSE 8080
 ENV PORT=8080 \
-    GOMEMLIMIT=512MiB
+    GOMEMLIMIT=512MiB \
+    CHROME_PATH=/usr/bin/chromium-browser
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
   CMD wget -qO- http://localhost:8080/health || exit 1
