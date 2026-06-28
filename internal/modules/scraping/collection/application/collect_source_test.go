@@ -138,7 +138,7 @@ func TestExecute_HappyPath_MaterializesEventAndUpdatesSnapshot(t *testing.T) {
 	clk := &clock.FakeClock{T: fixed}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: src.ID,
 	})
@@ -186,7 +186,7 @@ func TestExecute_ParseErrors_MarkErrorAndNoEvent(t *testing.T) {
 			clk := &clock.FakeClock{T: time.Now().UTC()}
 
 			uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-			err := uc.Execute(context.Background(), application.CollectSourceInput{
+			_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 				OrgID:    orgID,
 				SourceID: src.ID,
 			})
@@ -214,7 +214,7 @@ func TestExecute_FetchFailed_PropagatesError(t *testing.T) {
 	clk := &clock.FakeClock{T: time.Now().UTC()}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: src.ID,
 	})
@@ -234,7 +234,7 @@ func TestExecute_GetByIDError_Propagates(t *testing.T) {
 	clk := &clock.FakeClock{T: time.Now().UTC()}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: 999,
 	})
@@ -262,7 +262,7 @@ func TestExecute_InsertEventError_Propagates(t *testing.T) {
 	clk := &clock.FakeClock{T: time.Now().UTC()}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: src.ID,
 	})
@@ -289,7 +289,7 @@ func TestExecute_DedupedEvent_StillUpdatesSnapshot(t *testing.T) {
 	clk := &clock.FakeClock{T: time.Now().UTC()}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: src.ID,
 	})
@@ -313,7 +313,7 @@ func TestExecute_UpdateAfterCollect_ConcurrentUpdate_Propagates(t *testing.T) {
 	clk := &clock.FakeClock{T: time.Now().UTC()}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: src.ID,
 	})
@@ -331,7 +331,7 @@ func TestExecute_UnknownCollectorError_Propagates(t *testing.T) {
 	clk := &clock.FakeClock{T: time.Now().UTC()}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: src.ID,
 	})
@@ -350,7 +350,7 @@ func TestExecute_NilLogger_FallsBackToDefault(t *testing.T) {
 	clk := &clock.FakeClock{T: time.Now().UTC()}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, nil)
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: src.ID,
 	})
@@ -368,7 +368,7 @@ func TestExecute_ParseError_MarkErrorFails_PropagatesMarkError(t *testing.T) {
 	clk := &clock.FakeClock{T: time.Now().UTC()}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: src.ID,
 	})
@@ -394,7 +394,7 @@ func TestExecute_NoPriceDrop_OnlyUpdatesSnapshot(t *testing.T) {
 	clk := &clock.FakeClock{T: time.Now().UTC()}
 
 	uc := application.NewCollectSourceUseCase(sourceRepo, eventRepo, collector, clk, discardLogger())
-	err := uc.Execute(context.Background(), application.CollectSourceInput{
+	_, err := uc.Execute(context.Background(), application.CollectSourceInput{
 		OrgID:    orgID,
 		SourceID: src.ID,
 	})
