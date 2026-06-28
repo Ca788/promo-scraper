@@ -1,12 +1,26 @@
 version: "2"
 sql:
   - engine: "postgresql"
-    queries: "db/queries"
+    queries: "db/queries/sources.sql"
     schema: "db/migrations"
     gen:
       go:
         package: "sqlc"
         out: "internal/modules/scraping/sources/infrastructure/sqlc"
+        sql_package: "pgx/v5"
+        emit_json_tags: false
+        emit_prepared_queries: false
+        emit_interface: true
+        emit_exact_table_names: false
+        emit_empty_slices: true
+        emit_pointers_for_null_types: true
+  - engine: "postgresql"
+    queries: "db/queries/promo_events.sql"
+    schema: "db/migrations"
+    gen:
+      go:
+        package: "sqlc"
+        out: "internal/modules/scraping/promo_events/infrastructure/sqlc"
         sql_package: "pgx/v5"
         emit_json_tags: false
         emit_prepared_queries: false
