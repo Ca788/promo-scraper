@@ -1,0 +1,54 @@
+# Fly.io configuration — backend/go
+# Setup:
+#   flyctl launch --no-deploy
+#   flyctl postgres create --name promo-scraper-db --region gru
+#   flyctl postgres attach promo-scraper-db
+#   flyctl secrets set JWT_SECRET=$(openssl rand -base64 48)
+#   flyctl deploy
+
+app = "promo-scraper"
+primary_region = "gru"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  PORT = "8080"
+  ENV = "production"
+  GOMEMLIMIT = "512MiB"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["web"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 200
+    hard_limit = 250
+
+[[http_service.checks]]
+  interval = "15s"
+  timeout = "5s"
+  grace_period = "10s"
+  method = "GET"
+  path = "/health"
+
+[processes]
+  web = "/usr/local/bin/server"
+  worker = "/usr/local/bin/server -mode worker"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"
+  processes = ["web"]
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "512mb"
+  processes = ["worker"]

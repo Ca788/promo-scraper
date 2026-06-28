@@ -1,0 +1,30 @@
+name: deploy-go-fly
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy-fly-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Migrate database (release_command via fly)
+        run: flyctl deploy --remote-only --strategy=immediate
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      - name: Smoke test /health
+        run: |
+          sleep 8
+          curl -fsSL https://${{ vars.FLY_APP_NAME }}.fly.dev/health || (echo "smoke failed" && exit 1)

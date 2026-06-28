@@ -1,0 +1,164 @@
+================================================================================
+Passo 01 — bootstrap + módulo sources (domínio + persistência)
+Run: 2026-06-28T17:10:00Z
+Branch: feat/coleta-de-promo
+================================================================================
+
+ARQUIVOS ALTERADOS (git diff --cached --name-only)
+--------------------------------------------------------------------------------
+db/migrations/000001_init_stores_sources.down.sql
+db/migrations/000001_init_stores_sources.up.sql
+db/queries/sources.sql
+go.mod
+go.sum
+internal/modules/scraping/sources/domain/repository.go
+internal/modules/scraping/sources/domain/source.go
+internal/modules/scraping/sources/domain/source_test.go
+internal/modules/scraping/sources/infrastructure/pg_repository.go
+internal/modules/scraping/sources/infrastructure/pg_repository_test.go
+internal/modules/scraping/sources/infrastructure/sqlc/db.go
+internal/modules/scraping/sources/infrastructure/sqlc/models.go
+internal/modules/scraping/sources/infrastructure/sqlc/querier.go
+internal/modules/scraping/sources/infrastructure/sqlc/sources.sql.go
+sqlc.yaml
+
+(Nenhum arquivo fora deste conjunto foi tocado. main.go, .spec/, docker-compose.yml,
+CLAUDE.md preservados conforme orientação.)
+
+================================================================================
+COMANDOS EXECUTADOS (em ordem) + resumo
+================================================================================
+
+1) go install github.com/sqlc-dev/sqlc/cmd/sqlc@latest
+   → instalou v1.31.1 em $GOPATH/bin
+
+2) go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+   → instalou migrate v4.19.1 em $GOPATH/bin
+
+3) go get github.com/jackc/pgx/v5 github.com/jackc/pgx/v5/pgxpool \
+          github.com/shopspring/decimal github.com/stretchr/testify \
+          github.com/google/uuid
+   → todas as dependências adicionadas
+   → go mod tidy: deps "limpas" enquanto não havia imports; após criar
+     source_test.go + source.go + pg_repository.go elas voltam ao go.mod
+     (decimal v1.4.0, pgx/v5 v5.10.0, testify v1.11.1, uuid v1.6.0).
+
+4) sqlc generate
+   → 1ª tentativa: erro "Package override `go_type` specifier '[]byte' is not a
+     basic type". Removida a seção `overrides` (jsonb mapeia para []byte nativo
+     no pgx/v5). 2ª tentativa: OK.
+   → Gerados: internal/modules/scraping/sources/infrastructure/sqlc/{db.go,
+     models.go, querier.go, sources.sql.go}.
+
+5) docker compose up -d postgres
+   → FALHOU: porta 5432 ocupada por postgresql.service (postgres 14) do
+     sistema (systemd, Active: active). NÃO foi parado para não impactar
+     outros projetos do usuário. NÃO foi alterado docker-compose.yml
+     (refactor budget + escopo).
+
+   MITIGAÇÃO: subi um postgres ad-hoc via `docker run` mapeado em
+   55432 → 5432:
+     docker run -d --name promo-scraper-postgres-test \
+       -e POSTGRES_USER=app -e POSTGRES_PASSWORD=app -e POSTGRES_DB=app \
+       -p 55432:5432 postgres:16-alpine
+   pg_isready: "accepting connections"
+   DATABASE_URL usado nos testes:
+     postgres://app:app@localhost:55432/app?sslmode=disable
+
+   NOTA: o DSN canônico do docker-compose.yml (porta 5432) está preservado.
+   Quando o postgres local do sistema estiver parado, o `docker compose up -d
+   postgres` funcionará sem mudança alguma e os testes ainda passarão (o
+   helper setupTestDB respeita $DATABASE_URL e cai num fallback skip se nada
+   responder — útil para CI).
+
+6) migrate -path db/migrations -database "$DATABASE_URL" up
+   → "1/u init_stores_sources (31.4ms)"  versão = 1.
+   → Sanidade: `migrate down 1` → versão 0 ("no migration"); `migrate up`
+     novamente → "1/u init_stores_sources (35.3ms)"  versão = 1. Reversível.
+
+7) psql \d sources / pg_indexes:
+   - Colunas conferem com DESENHO.md: id, org_id (uuid), store_id (FK stores),
+     url, strategy (CHECK IN http/headless), interval_seconds, selectors
+     (jsonb), enabled (default true), last_collected_at, last_snapshot,
+     last_error, version (default 1), created_at, updated_at.
+   - UNIQUE (org_id, url): "sources_org_id_url_key".
+   - INDEX (enabled, last_collected_at): "sources_scheduler_idx".
+   - UNIQUE (org_id, host) em stores: "stores_org_id_host_key".
+
+8) go test ./... -race -cover  (rodada final com -count=1)
+   ok   promo-scraper/internal/modules/scraping/sources/domain         1.013s  coverage: 100.0% of statements
+   ok   promo-scraper/internal/modules/scraping/sources/infrastructure 1.505s  coverage:  77.5% of statements
+        promo-scraper                                                          coverage: 0.0% of statements
+        promo-scraper/internal/modules/scraping/sources/infrastructure/sqlc    coverage: 0.0% of statements
+
+   Detalhe (verbose):
+     === RUN   TestSnapshot_HasPriceDrop
+     --- PASS: TestSnapshot_HasPriceDrop (com 5 subcasos)
+     === RUN   TestGetEligibleSources_ReturnsOnlyEligible
+     --- PASS  (0.12s)
+     === RUN   TestGetEligibleSources_NeverCollected
+     --- PASS  (0.12s)
+     === RUN   TestUpdateSourceAfterCollect_OptimisticLocking
+     --- PASS  (0.07s)
+     === RUN   TestUpdateSourceAfterCollect_NotFoundOtherOrg
+     --- PASS  (0.07s)
+     === RUN   TestMarkError_SetsErrorAndBumpsVersion
+     --- PASS  (0.06s)
+     === RUN   TestGetByID_NotFound
+     --- PASS  (0.06s)
+     === RUN   TestWithTx_RollbackOnError
+     --- PASS  (0.06s)
+
+9) go vet ./...   → limpo (sem saída de erro).
+
+10) golangci-lint run  → NÃO disponível no ambiente local. Pulado conforme
+    instrução do prompt. CI deve cobrir.
+
+11) git add (apenas dos 15 arquivos listados acima). NENHUM `git commit`.
+
+================================================================================
+TDD — ciclo seguido
+================================================================================
+🔴 source_test.go (HasPriceDrop) → falha por ausência de source.go.
+🟢 source.go (Snapshot/HasPriceDrop) → testes verdes (cobertura 100%).
+🔴 pg_repository_test.go → falha por ausência de pg_repository.go.
+🟢 pg_repository.go (PGSourceRepository com pool + sqlc + WithTx) → testes
+   verdes.
+🔵 Refatorações: extração de helpers `setupTestDB`, `insertStore`,
+   `insertSource`, `toPgUUID`, `fromPgUUID`, `mapRowToDomain` para evitar
+   duplicação. Constante `defaultEligibleLimit = 100` (sem números mágicos).
+   ErrConcurrentUpdate retornado tanto em conflito de version quanto em
+   tentativa de update de outro tenant (defesa em profundidade — multi-tenant).
+
+================================================================================
+DECISÕES PONTUAIS
+================================================================================
+- jsonb mapeado para []byte (default pgx/v5). Conversão para domain.Snapshot /
+  map[string]string acontece em mapRowToDomain via encoding/json.
+- defaultEligibleLimit = 100: aplicado quando o caller informa limit <= 0,
+  prevenindo SELECT sem LIMIT efetivo (CLAUDE.md proíbe).
+- PGSourceRepository tem dois modos: "pool" (uso normal) e "transação"
+  (criado dentro de WithTx). Aninhamento de WithTx retorna erro tipado em vez
+  de panic.
+- WithTx usa pgx.TxOptions{} (default = ReadCommitted), suficiente para o
+  optimistic locking via coluna `version`.
+- Helper de testes setupTestDB faz t.Skip quando o DSN não responde → os
+  testes de integração não quebram CI sem Docker.
+- Selectors persistidos como jsonb com chaves padrão `preco`/`estoque`/
+  `badge` nos fixtures de teste; o domínio expõe `map[string]string`.
+
+================================================================================
+CRITÉRIOS DE SUCESSO (DoD)
+================================================================================
+[x] Domain unit + infrastructure integration tests verdes.
+[x] Migration up + down + up novamente conferem (estado final = versão 1).
+[x] go vet ./... limpo.
+[x] Nenhum fmt.Println / panic em código de produção.
+[x] Toda query sqlc filtra org_id (GetEligibleSources, GetSourceByID,
+    UpdateSourceAfterCollect, MarkSourceError).
+[x] sqlc é a fonte de toda query SQL (nenhuma string SQL ad-hoc no repo de
+    produção; o setup de testes usa SQL direto apenas em fixtures).
+[x] Optimistic locking validado (TestUpdateSourceAfterCollect_OptimisticLocking,
+    TestUpdateSourceAfterCollect_NotFoundOtherOrg).
+[x] Coverage: domain 100%, infrastructure 77.5%.
+[x] git add somente dos arquivos tocados; NENHUM git commit.

@@ -1,0 +1,77 @@
+# Cleanup de comentários — sources (Passo bootstrap-sources-persistencia)
+
+Data: 2026-06-28T17:30:00Z
+Branch: feat/coleta-de-promo
+Repo:   /home/erural/Documents/promo-scraper
+
+## Escopo
+
+Remoção de todos os comentários Go escritos manualmente no Passo
+bootstrap-sources-persistencia (godoc + inline), preservando código gerado
+pelo sqlc, SQL (migrations + queries com diretivas sqlc) e configs.
+
+## Arquivos modificados (5)
+
+| Arquivo                                                                                 | Linhas antes | Linhas depois | Δ      |
+| --------------------------------------------------------------------------------------- | -----------: | ------------: | -----: |
+| internal/modules/scraping/sources/domain/source.go                                      |           59 |            48 |    -11 |
+| internal/modules/scraping/sources/domain/repository.go                                  |           41 |            24 |    -17 |
+| internal/modules/scraping/sources/domain/source_test.go                                 |           69 |            68 |     -1 |
+| internal/modules/scraping/sources/infrastructure/pg_repository.go                       |          209 |           193 |    -16 |
+| internal/modules/scraping/sources/infrastructure/pg_repository_test.go                  |          337 |           332 |     -5 |
+
+Total removido: -50 linhas.
+
+Observação: o arquivo `source_test.go` já não possuía comentários escritos
+à mão; a diferença de 1 linha corresponde a normalização final via
+`gofmt -s -w` (trailing newline).
+
+## Arquivos NÃO tocados (conforme escopo)
+
+- internal/modules/scraping/sources/infrastructure/sqlc/*.go (gerado)
+- db/migrations/000001_init_stores_sources.{up,down}.sql
+- db/queries/sources.sql (diretivas `-- name: ... :many` obrigatórias)
+- sqlc.yaml, go.mod, go.sum
+
+## Verificações automáticas
+
+Comando: grep -nE '^\s*//|^\s*/\*' <arquivo>
+Resultado: 0 linhas em todos os 5 arquivos.
+
+Comando: grep -nE '\s+//.*$' <arquivo>
+Resultado: 0 linhas em todos os 5 arquivos.
+
+Build tags (//go:build / // +build): nenhuma encontrada — nada a preservar.
+
+## Pipeline
+
+- gofmt -s -w (5 arquivos): OK
+- go vet ./...                : OK
+- go test ./... -race -cover  : OK
+
+### Saída resumida go test ./... -race -cover
+
+    promo-scraper                                                            coverage: 0.0% of statements
+ok  promo-scraper/internal/modules/scraping/sources/domain                    1.020s  coverage: 100.0% of statements
+ok  promo-scraper/internal/modules/scraping/sources/infrastructure            1.451s  coverage:  77.5% of statements
+    promo-scraper/internal/modules/scraping/sources/infrastructure/sqlc       coverage: 0.0% of statements
+
+Cobertura idêntica à baseline do Passo 01 (domain 100% / infrastructure 77.5%).
+
+## Postgres ad-hoc
+
+Container reaproveitado do Passo 01:
+
+    NAMES                         STATUS         PORTS
+    promo-scraper-postgres-test   Up 8 minutes   0.0.0.0:55432->5432/tcp
+
+DSN: postgres://app:app@localhost:55432/app?sslmode=disable
+
+## Staging
+
+Apenas os 5 arquivos limpos foram re-stagiados via `git add`. Nenhum
+commit realizado, conforme política.
+
+## Resultado
+
+ok
