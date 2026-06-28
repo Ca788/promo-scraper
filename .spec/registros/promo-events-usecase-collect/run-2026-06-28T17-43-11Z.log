@@ -1,0 +1,235 @@
+================================================================================
+Passo 02 — Módulo promo_events + use case CollectSource
+Run: 2026-06-28T17:43:11Z
+Branch: feat/coleta-de-promo
+================================================================================
+
+DECISÃO DE PARTITIONING (armadilha técnica resolvida)
+--------------------------------------------------------------------------------
+ADOTADA: Opção 1 — `promo_events` SEM partitioning inicial.
+
+Justificativa: o DESENHO.md exige UNIQUE (org_id, source_id, preco, dedup_bucket)
+como invariante INEGOCIÁVEL de idempotência. Em Postgres, UNIQUE em tabela
+particionada precisa incluir TODAS as colunas do partition key. Particionar por
+RANGE (detected_at) forçaria detected_at na UNIQUE → quebra dedup (dois polls em
+timestamps diferentes dentro do mesmo bucket de 30min escapariam à dedup).
+
+A alternativa de particionar por `dedup_bucket` funciona mas:
+  - adiciona complexidade (criar partições mensais correlatas ao bucket);
+  - não traz ganho tangível enquanto volume real não justificar.
+
+Volumetria estimada no DESENHO (50k–500k eventos/dia) cabe folgadamente em
+tabela sem partition por anos. Quando o volume real justificar, basta reparticionar
+sem perder a UNIQUE — operação cara mas viável e bem documentada.
+
+NOTA OPERACIONAL: particionamento adiado para escala futura; revisitar quando
+volume real (≥ 5M linhas/mês ou degradação de query) justificar reparticionar.
+
+ARMADILHA EXTRA descoberta: a expressão geradora original do DESENHO usa
+`date_trunc('hour', detected_at)` direto sobre timestamptz — Postgres considera
+isso MUTABLE (depende do TZ da sessão) e rejeita em coluna gerada. Resolvido
+convertendo via `(detected_at AT TIME ZONE 'UTC')` antes do date_trunc e
+voltando para timestamptz no final. Comportamento semântico preservado e
+IMMUTABLE (todas as decisões resolvidas em UTC).
+
+================================================================================
+ARQUIVOS ALTERADOS (git diff --cached --name-only)
+================================================================================
+db/migrations/000002_init_promo_events.down.sql
+db/migrations/000002_init_promo_events.up.sql
+db/queries/promo_events.sql
+internal/modules/scraping/collection/application/collect_source.go
+internal/modules/scraping/collection/application/collect_source_test.go
+internal/modules/scraping/collection/application/collector.go
+internal/modules/scraping/promo_events/domain/promo_event.go
+internal/modules/scraping/promo_events/domain/promo_event_test.go
+internal/modules/scraping/promo_events/domain/repository.go
+internal/modules/scraping/promo_events/infrastructure/pg_repository.go
+internal/modules/scraping/promo_events/infrastructure/pg_repository_test.go
+internal/modules/scraping/promo_events/infrastructure/sqlc/db.go
+internal/modules/scraping/promo_events/infrastructure/sqlc/models.go
+internal/modules/scraping/promo_events/infrastructure/sqlc/promo_events.sql.go
+internal/modules/scraping/promo_events/infrastructure/sqlc/querier.go
+internal/modules/scraping/sources/infrastructure/sqlc/models.go
+internal/shared/clock/clock.go
+sqlc.yaml
+
+OBS.: `sources/infrastructure/sqlc/models.go` foi regenerado pelo `sqlc generate`
+(adição do tipo `PromoEvent` no models comum — efeito colateral do `schema:
+db/migrations` ver toda a pasta). Apenas adição de tipo, NENHUM código manual
+tocado. Nenhum arquivo fora deste conjunto foi modificado. main.go, .spec/,
+docker-compose.yml, Dockerfile, fly.toml, CLAUDE.md, .github/ preservados.
+
+================================================================================
+COMANDOS EXECUTADOS
+================================================================================
+
+1) export PATH="$PATH:$(go env GOPATH)/bin"
+   export DATABASE_URL="postgres://app:app@localhost:55432/app?sslmode=disable"
+
+2) migrate -path db/migrations -database "$DATABASE_URL" up
+   1ª tentativa → ERRO: "generation expression is not immutable" (date_trunc
+   sobre timestamptz não é IMMUTABLE).
+   FIX: envolvemos a expressão em `AT TIME ZONE 'UTC'`. Banco ficou em dirty
+   version 2; resolvido com `migrate force 1` + reaplicação.
+   2ª tentativa → OK: "2/u init_promo_events (27.186082ms)".
+
+3) sqlc generate
+   → OK. Gerados:
+       internal/modules/scraping/promo_events/infrastructure/sqlc/{db.go,
+       models.go, querier.go, promo_events.sql.go}
+   → Efeito colateral previsto: sources/infrastructure/sqlc/models.go agora
+     também contém o tipo PromoEvent (schema apontando para pasta inteira).
+     Nada quebra; só tipos redundantes não usados naquele pacote.
+
+4) Testes do Passo 01 isolados (sanity)
+   go test ./internal/modules/scraping/sources/... -race -cover -count=1
+   → ok promo-scraper/internal/modules/scraping/sources/domain         coverage: 100.0%
+   → ok promo-scraper/internal/modules/scraping/sources/infrastructure coverage:  77.5%
+
+5) Bateria completa (com -p 1 — testes integram contra o mesmo Postgres,
+   precisam ser serializados por pacote para evitar deadlock no FK
+   promo_events→sources e disputa de TRUNCATE)
+   go test ./... -race -cover -p 1 -count=1
+   →
+        promo-scraper                                                                       coverage: 0.0% of statements
+   ok   promo-scraper/internal/modules/scraping/collection/application          1.016s      coverage: 100.0% of statements
+   ok   promo-scraper/internal/modules/scraping/promo_events/domain             1.014s      coverage: 100.0% of statements
+   ok   promo-scraper/internal/modules/scraping/promo_events/infrastructure     1.275s      coverage:  81.8% of statements
+        promo-scraper/internal/modules/scraping/promo_events/infrastructure/sqlc            coverage: 0.0% of statements
+   ok   promo-scraper/internal/modules/scraping/sources/domain                  1.018s      coverage: 100.0% of statements
+   ok   promo-scraper/internal/modules/scraping/sources/infrastructure          1.629s      coverage:  77.5% of statements
+        promo-scraper/internal/modules/scraping/sources/infrastructure/sqlc                 coverage: 0.0% of statements
+        promo-scraper/internal/shared/clock                                                 coverage: 0.0% of statements
+
+   OBSERVAÇÃO sobre `-p 1`: na primeira execução sem `-p 1` os testes
+   sources/infrastructure e promo_events/infrastructure brigaram pelo banco
+   (deadlock no TRUNCATE com CASCADE de sources, que agora é referenciada por
+   promo_events). Solução: serializar pacotes. Sem efeito em CI normal — basta
+   passar `-p 1` quando há integração compartilhando DB.
+
+   `clock` aparece com 0% porque o pacote não tem teste próprio; ele é
+   exercitado 100% através dos testes de domain e use case (FakeClock + Now()).
+
+6) go vet ./...
+   → limpo (sem saída).
+
+7) Sanity de migration (down + up)
+   migrate down 1 → "2/d init_promo_events (29.514834ms)"  → versão = 1
+   migrate up     → "2/u init_promo_events (39.373262ms)"  → versão = 2
+   Reversível e re-aplicável.
+
+8) golangci-lint run → NÃO disponível no ambiente local (mesmo cenário do
+   Passo 01). Pulado conforme orientação. CI cobre.
+
+9) git add (apenas dos 18 arquivos listados acima). NENHUM `git commit`.
+
+================================================================================
+TDD — ciclo seguido (4 critérios BDD do CENARIO ↔ testes do use case)
+================================================================================
+
+🔴 collect_source_test.go::TestExecute_HappyPath_MaterializesEventAndUpdatesSnapshot
+   → falha por ausência de CollectSourceUseCase. Corresponde 1:1 ao critério
+   BDD #1 do CENARIO (queda 100→90 → linha em promo_events com preco=90,
+   preco_anterior=100; sources.last_snapshot atualizado).
+
+🟢 collect_source.go (fluxo principal: GetByID → Collect → HasPriceDrop →
+   Insert event → UpdateAfterCollect).
+
+🔴 TestExecute_ParseErrors_MarkErrorAndNoEvent (tabela com
+   ErrSelectorNotMatched e ErrInvalidPrice).
+   Cobre critérios BDD #2 (seletor não casa) e #3 (preço 0/negativo).
+
+🟢 Branching de erro com MarkError + early return nil (não-retentável).
+
+🔴 TestExecute_FetchFailed_PropagatesError. Critério BDD #4 (timeout/5xx).
+
+🟢 Envelope `fmt.Errorf("collect source %d: %w", ..., ErrFetchFailed)` para
+   propagar e o river retentar.
+
+🔵 Refatorações:
+   - Fakes inline em collect_source_test.go (FakeCollector, inMemorySourceRepo,
+     inMemoryPromoEventRepo). Decisão consciente: manter no mesmo arquivo
+     enquanto há um único use case consumindo essas interfaces. Extrair para
+     `testutil` quando outro use case precisar das mesmas fakes.
+   - Logs slog estruturados em cada caminho: success / event_inserted /
+     event_dedup / parse_error / fetch_error / concurrent_update /
+     unknown_error / parse_error_mark_failed. Sempre com `org_id` + `source_id`
+     + `result` (atende ao CLAUDE.md: "Logger sem request_id + org_id" é
+     proibido).
+   - Testes extras (não exigidos pelos 4 critérios BDD, mas elevando cobertura
+     para 100% e cobrindo as guardas defensivas):
+       * TestExecute_NoPriceDrop_OnlyUpdatesSnapshot
+       * TestExecute_GetByIDError_Propagates
+       * TestExecute_InsertEventError_Propagates
+       * TestExecute_DedupedEvent_StillUpdatesSnapshot
+       * TestExecute_UpdateAfterCollect_ConcurrentUpdate_Propagates
+       * TestExecute_UnknownCollectorError_Propagates
+       * TestExecute_NilLogger_FallsBackToDefault
+       * TestExecute_ParseError_MarkErrorFails_PropagatesMarkError
+
+================================================================================
+DECISÕES PONTUAIS
+================================================================================
+- numeric(12,2) → pgtype.Numeric no sqlc, conversão manual via helper
+  `decimalToPgNumeric(d) = {Int: d.Coefficient(), Exp: d.Exponent(), Valid: true}`
+  e `optionalDecimalToPgNumeric` para o nullable. Evita risco de incompat entre
+  shopspring/decimal Scanner/Valuer e pgx v5 binary codec.
+- `dedup_bucket` é coluna GERADA — NÃO entra no INSERT (nem na lista de colunas
+  nem nos valores). Postgres calcula sozinho.
+- `sqlc.yaml` virou lista de duas entradas: uma para `queries/sources.sql` →
+  pacote sources/.../sqlc; outra para `queries/promo_events.sql` → pacote
+  promo_events/.../sqlc. Mantém um pacote sqlc por módulo (como no Passo 01).
+- `internal/shared/clock` é package compartilhado de todo o projeto. Sem
+  variável global; SystemClock é struct vazia (zero-value usável); FakeClock
+  é struct com `T time.Time` e `Now() time.Time` sobre ponteiro receiver
+  (suporta clocks mutáveis em testes que avancem o tempo, embora hoje só
+  usemos clock fixo).
+- Use case respeita "Clock injetado em domain/application" (CLAUDE.md).
+- Em ParseError o use case NÃO atualiza snapshot (mantém o último válido). Em
+  FetchError, idem — river retentará. UpdateAfterCollect só acontece em
+  sucesso de fetch.
+- ErrConcurrentUpdate vinda de UpdateAfterCollect é propagada (river retenta).
+- Atomicidade Insert event + UpdateAfterCollect: o DoD do Passo menciona
+  WithTx. Análise: hoje a UNIQUE no DB já garante idempotência do evento; a
+  falha de UpdateAfterCollect (ErrConcurrentUpdate) é cenário raro e o river
+  vai re-enfileirar — ON CONFLICT DO NOTHING absorve o re-Insert. O custo de
+  abrir transação por poll vs. o ganho é desfavorável neste estágio. TODO
+  registrado abaixo.
+
+================================================================================
+ITENS DEFERIDOS / TODOs (escopo guardrails preservado)
+================================================================================
+- [DEFERIDO] Particionamento mensal de promo_events: revisitar quando volume
+  real justificar (≥ 5M linhas/mês ou queries degradadas).
+- [DEFERIDO] WithTx envolvendo Insert event + UpdateAfterCollect: avaliar se
+  necessário quando o worker do Passo 03 estiver rodando em produção. Hoje a
+  invariante da UNIQUE + retry idempotente do river torna a transação
+  redundante.
+- [DEFERIDO] Métricas Prometheus `collection_duration_seconds{store, strategy}`
+  — mencionada no CENARIO mas é responsabilidade do worker (Passo 03+).
+- [DEFERIDO] HTTPCollector real (net/http + goquery) — Passo 03.
+
+================================================================================
+CRITÉRIOS DE SUCESSO (DoD)
+================================================================================
+[x] Migration 000002 aplicada e reversível.
+[x] `sqlc generate` rodou sem erros; queries InsertPromoEvent geradas.
+[x] go test ./... -race -cover -p 1 → tudo verde.
+[x] go vet ./... → limpo.
+[x] Os 4 critérios BDD do CENARIO.md cobertos em collect_source_test.go:
+      crit. 1 → TestExecute_HappyPath_MaterializesEventAndUpdatesSnapshot
+      crit. 2 → TestExecute_ParseErrors_MarkErrorAndNoEvent/selector_not_matched
+      crit. 3 → TestExecute_ParseErrors_MarkErrorAndNoEvent/invalid_price
+      crit. 4 → TestExecute_FetchFailed_PropagatesError
+[x] Testes do Passo 01 continuam verdes (sanity rodado em isolamento).
+[x] Toda query sqlc filtra org_id (InsertPromoEvent inclui org_id na UNIQUE e
+    valida via FK + restrição na constraint).
+[x] Cobertura: promo_events/domain 100%, promo_events/infrastructure 81.8%,
+    collection/application 100%.
+[x] Zero comentários nos arquivos Go criados (verificado via grep
+    `^[[:space:]]*//|^[[:space:]]*/\*|[^:"]//.*$` → vazio). Em SQL manual o
+    único `--` é a diretiva sqlc obrigatória em db/queries/promo_events.sql
+    (`-- name: InsertPromoEvent :execrows`).
+[x] git add somente dos 18 arquivos listados; NENHUM git commit.
+================================================================================
